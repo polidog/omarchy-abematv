@@ -26,7 +26,7 @@ mark, so a 21:40 heading is not read as tonight.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/polidog/omarchy-plugin-abematv.git --enable
+omarchy plugin add https://github.com/polidog/omarchy-abematv.git --enable
 ```
 
 `--enable` puts the widget in the bar and asks which section; drop it to add the
@@ -44,8 +44,8 @@ one QML file, one JS file and two shell scripts.
 ### From a clone, to hack on it
 
 ```bash
-git clone https://github.com/polidog/omarchy-plugin-abematv
-cd omarchy-plugin-abematv
+git clone https://github.com/polidog/omarchy-abematv
+cd omarchy-abematv
 tools/install-local
 ```
 

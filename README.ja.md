@@ -24,7 +24,7 @@
 ## インストール
 
 ```bash
-omarchy plugin add https://github.com/polidog/omarchy-plugin-abematv.git --enable
+omarchy plugin add https://github.com/polidog/omarchy-abematv.git --enable
 ```
 
 `--enable` を付けるとバーに追加して置き場所（左/中央/右）を聞かれます。あとから
@@ -42,8 +42,8 @@ omarchy bar move io.github.polidog.abematv --section right
 ### 手元で触る場合
 
 ```bash
-git clone https://github.com/polidog/omarchy-plugin-abematv
-cd omarchy-plugin-abematv
+git clone https://github.com/polidog/omarchy-abematv
+cd omarchy-abematv
 tools/install-local
 ```
 
