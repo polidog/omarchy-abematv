@@ -509,8 +509,10 @@ Panel {
                       onHoveredChanged: if (hovered) { root.cursorActive = true; root.cursor = column.modelData.flatIndex }
                     }
 
+                    // The channel head opens what the channel is airing; the
+                    // block *is* that programme, so tapping it just watches.
                     TapHandler {
-                      onTapped: root.openDetail(column.modelData)
+                      onTapped: root.watch(column.modelData)
                     }
                   }
                 }
