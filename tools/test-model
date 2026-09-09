@@ -1,0 +1,146 @@
+#!/usr/bin/env node
+// tools/test-model — run the panel's data helpers without a shell.
+//
+// Model.js is a QML JS library, so the .pragma line is stripped before eval.
+const fs = require("fs")
+const path = require("path")
+const assert = require("assert")
+
+const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
+  .replace(/^\s*\.pragma\s+library\s*/, "")
+const M = {}
+new Function("exports", source + "\nObject.assign(exports, { buildView, buildGrid, gridWindow, summary, isChannelId, watchUrl, logoUrl, dayNote, clock, formatRemaining, progressOf, castLine })")(M)
+
+const NOW = 1700000000
+const channels = JSON.stringify({ channels: [
+  { id: "abema-news", name: "ABEMA NEWS" },
+  { id: "abema-anime", name: "ABEMA アニメ" }
+]})
+const slots = JSON.stringify({ slots: [
+  { channelId: "abema-anime", title: "第3話 出発", startAt: NOW - 600, endAt: NOW + 1200 },
+  { channelId: "abema-news", title: "昼のニュース", startAt: NOW - 60, endAt: NOW + 60 },
+  { channelId: "mystery-ch", title: "Unlisted channel", startAt: NOW, endAt: NOW + 60 },
+  { channelId: "../../etc/passwd", title: "Nope", startAt: NOW, endAt: NOW + 60 }
+]})
+
+// Channel ids reach a URL and a command line: only plain ids get through.
+assert.ok(M.isChannelId("abema-anime"))
+assert.ok(!M.isChannelId("../../etc/passwd"))
+assert.ok(!M.isChannelId("a b"))
+assert.ok(!M.isChannelId(""))
+assert.strictEqual(M.watchUrl("abema-anime"), "https://abema.tv/now-on-air/abema-anime")
+assert.strictEqual(M.watchUrl("evil;id"), "")
+
+const view = M.buildView(channels, slots, "", NOW)
+assert.strictEqual(view.total, 3, "the bad channel id is dropped, the unlisted one is kept")
+assert.deepStrictEqual(view.rows.map(r => r.channelId), ["abema-anime", "abema-news", "mystery-ch"],
+  "a TV listing runs down the clock: earliest start first")
+assert.strictEqual(view.rows[0].channelName, "ABEMA \u30a2\u30cb\u30e1")
+assert.strictEqual(view.rows[2].channelName, "mystery-ch", "an unlisted channel falls back to its id")
+assert.deepStrictEqual(view.rows.map(r => r.flatIndex), [0, 1, 2])
+
+// Rows are bucketed under their printed start time, in clock order.
+assert.deepStrictEqual(view.groups.map(g => g.timeLabel), view.groups.map(g => g.items[0].startLabel))
+assert.deepStrictEqual(view.groups.map(g => g.items.length), [1, 1, 1])
+
+// Two slots a few seconds apart share one heading, and the channel order
+// inside a bucket follows the channel list, not the arrival order.
+const together = JSON.stringify({ slots: [
+  { channelId: "abema-anime", title: "B", startAt: NOW + 20, endAt: NOW + 600 },
+  { channelId: "abema-news", title: "A", startAt: NOW, endAt: NOW + 600 }
+]})
+const bucketed = M.buildView(channels, together, "", NOW)
+assert.strictEqual(bucketed.groups.length, 1, "same printed minute, one heading")
+assert.deepStrictEqual(bucketed.groups[0].items.map(r => r.channelId), ["abema-news", "abema-anime"])
+
+// A slot that began before today is marked, so its heading is not read as tonight.
+const DAY = 86400
+assert.strictEqual(M.dayNote(NOW, NOW), "")
+assert.strictEqual(M.dayNote(NOW - 2 * DAY, NOW), "-2d")
+const overnight = JSON.stringify({ slots: [
+  { channelId: "abema-news", title: "Late", startAt: NOW - DAY, endAt: NOW + 600 },
+  { channelId: "abema-anime", title: "Today", startAt: NOW - 600, endAt: NOW + 600 }
+]})
+const spanning = M.buildView(channels, overnight, "", NOW)
+assert.strictEqual(spanning.groups.length, 2, "same clock time on two days never shares a heading")
+assert.strictEqual(spanning.groups[0].dayNote, "-1d")
+assert.strictEqual(spanning.groups[1].dayNote, "")
+
+// Logos are built from the same validated id as the watch URL.
+assert.ok(M.logoUrl("abema-news").startsWith("https://image.p-c2-x.abema-tv.com/image/channels/abema-news/logo.png?"))
+assert.strictEqual(M.logoUrl("evil;id"), "")
+assert.strictEqual(view.rows[0].endLabel, "~" + M.clock(NOW + 1200))
+
+// Progress and the countdown drive the bar under each row.
+assert.strictEqual(M.progressOf(NOW - 600, NOW + 1200, NOW).toFixed(3), "0.333")
+assert.strictEqual(M.progressOf(NOW + 10, NOW, NOW), 1, "a broken range reads as full, never negative")
+assert.strictEqual(M.formatRemaining(NOW + 720, NOW), "12m left")
+assert.strictEqual(M.formatRemaining(NOW - 5, NOW), "ending")
+assert.strictEqual(M.formatRemaining(NOW + 5400, NOW), "1h 30m left")
+
+// Filtering matches channel names and programme titles alike.
+assert.strictEqual(M.buildView(channels, slots, "ニュース", NOW).matched, 1)
+assert.strictEqual(M.buildView(channels, slots, "ABEMA", NOW).matched, 2)
+assert.strictEqual(M.buildView(channels, slots, "zzz", NOW).matched, 0)
+assert.strictEqual(M.buildView(channels, slots, "zzz", NOW).total, 3, "a filter hides rows, it does not lose them")
+assert.strictEqual(M.buildView(channels, slots, "zzz", NOW).groups.length, 0, "no rows, no headings")
+assert.strictEqual(M.buildView(channels, slots, "\u30cb\u30e5\u30fc\u30b9", NOW).groups.length, 1)
+
+// The detail view reads three more fields off the slot; they are clamped like
+// every other string, and a slot without them still yields strings.
+const detailed = JSON.stringify({ slots: [{
+  channelId: "abema-news", title: "Long one", startAt: NOW, endAt: NOW + 60,
+  detailHighlight: "\u898b\u3069\u3053\u308d", content: "a\nb",
+  credit: { casts: ["A", "B"], crews: ["C"] }
+}]})
+const withDetail = M.buildView(channels, detailed, "", NOW).rows[0]
+assert.strictEqual(withDetail.detail, "\u898b\u3069\u3053\u308d")
+assert.strictEqual(withDetail.content, "a b", "a newline would fold the detail view's layout")
+assert.strictEqual(withDetail.casts, "A / B", "crews are left out; only the cast line fits")
+assert.strictEqual(view.rows[0].detail, "")
+assert.strictEqual(view.rows[0].casts, "", "no credit block, no cast line")
+assert.strictEqual(M.castLine({ casts: "not an array" }), "")
+assert.strictEqual(M.castLine(null), "")
+assert.ok(M.buildView(channels, JSON.stringify({ slots: [{
+  channelId: "abema-news", title: "x", startAt: NOW, endAt: NOW + 60,
+  content: "\u3042".repeat(900)
+}]}), "", NOW).rows[0].content.length <= 601, "a synopsis cannot grow the panel without bound")
+
+// Bad input never throws; it produces an empty view.
+assert.strictEqual(M.buildView("", "", "", NOW).rows.length, 0)
+assert.strictEqual(M.buildView("", "", "", NOW).error, "", "nothing fetched yet is not an error")
+assert.ok(M.buildView(channels, "<html>502</html>", "", NOW).error !== "")
+assert.strictEqual(M.buildView(channels, JSON.stringify({ slots: null }), "", NOW).rows.length, 0)
+
+// A control character in a title would fold a one-line row.
+const dirty = JSON.stringify({ slots: [{ channelId: "abema-news", title: "a\nb", startAt: NOW, endAt: NOW + 60 }] })
+assert.strictEqual(M.buildView(channels, dirty, "", NOW).rows[0].title, "a b")
+
+// The grid: one column per channel, in channel order, over a fixed window.
+const grid = M.buildGrid(channels, slots, "", NOW)
+const win = M.gridWindow(NOW)
+assert.strictEqual(win.end - win.start, 4 * 3600, "a four-hour window")
+assert.strictEqual(win.start % 1800, 0, "snapped to the half hour so the ruler is round")
+assert.ok(win.start < NOW && NOW < win.end)
+assert.deepStrictEqual(grid.columns.map(c => c.channelId), ["abema-news", "abema-anime", "mystery-ch"],
+  "columns follow the channel list, not the clock")
+assert.deepStrictEqual(grid.columns.map(c => c.flatIndex), [0, 1, 2])
+assert.ok(grid.hours.length >= 4 && grid.hours.every(h => h.top >= 0 && h.top <= 1))
+assert.ok(grid.nowTop > 0 && grid.nowTop < 1)
+
+// Blocks are placed as ratios of the window and clipped at both edges.
+const anime = grid.columns.find(c => c.channelId === "abema-anime")
+assert.ok(anime.top > 0 && anime.height > 0 && anime.top + anime.height <= 1)
+const spilling = M.buildGrid(channels, JSON.stringify({ slots: [
+  { channelId: "abema-news", title: "All day", startAt: NOW - 10 * 3600, endAt: NOW + 10 * 3600 }
+]}), "", NOW)
+assert.strictEqual(spilling.columns[0].top, 0)
+assert.strictEqual(spilling.columns[0].height, 1, "a programme longer than the window fills it")
+assert.ok(spilling.columns[0].clippedTop && spilling.columns[0].clippedBottom)
+
+// Both layouts read the same rows, so a filter counts the same either way.
+assert.strictEqual(M.buildGrid(channels, slots, "\u30cb\u30e5\u30fc\u30b9", NOW).matched,
+  M.buildView(channels, slots, "\u30cb\u30e5\u30fc\u30b9", NOW).matched)
+assert.strictEqual(M.buildGrid(channels, "<html>502</html>", "", NOW).error !== "", true)
+
+console.log("test-model: ok")

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# abematv-watch — open an ABEMA channel in one reused web-app window.
+#
+# Chromium's --app mode opens a fresh window per URL, so picking a second
+# channel would stack windows on top of the first. Close the ABEMA window that
+# is already up before opening the new one: its player is being replaced
+# anyway, and the new window lands in the same place under the same rules.
+set -euo pipefail
+
+url="${1:-}"
+case "$url" in
+  https://abema.tv/now-on-air/*) ;;
+  *) echo "abematv-watch: refusing '$url'" >&2; exit 1 ;;
+esac
+
+# Only web-app windows carry a chrome-abema.tv* class; a regular browser tab on
+# abema.tv is somebody's own tab and is left alone.
+if command -v hyprctl >/dev/null && command -v jq >/dev/null; then
+  while read -r address; do
+    [ -n "$address" ] || continue
+    hyprctl dispatch "hl.dsp.window.close({ window = \"address:$address\" })" >/dev/null || true
+  done < <(hyprctl -j clients 2>/dev/null |
+    jq -r '.[] | select(.class | startswith("chrome-abema.tv")) | .address')
+fi
+
+exec omarchy-launch-webapp "$url"

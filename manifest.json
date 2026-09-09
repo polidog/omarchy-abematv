@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.polidog.abematv",
+  "name": "ABEMA",
+  "version": "0.5.0",
+  "author": "polidog",
+  "license": "MIT",
+  "description": "What every ABEMA channel is airing right now, in one panel. Click a channel for its programme, then watch it.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "ABEMA",
+    "description": "Live ABEMA schedule; click a channel for what it is airing, then Enter to watch.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "layout": "grid",
+      "openWith": "webapp",
+      "showFilter": true
+    },
+    "schema": [
+      {
+        "key": "layout",
+        "type": "enum",
+        "label": "Panel layout",
+        "options": [
+          "grid",
+          "listing"
+        ],
+        "defaultValue": "grid",
+        "description": "grid is abema.tv/timetable’s shape — a column per channel, time running down. listing is a newspaper TV column, grouped by start time."
+      },
+      {
+        "key": "openWith",
+        "type": "enum",
+        "label": "Open a channel with",
+        "options": [
+          "webapp",
+          "browser"
+        ],
+        "defaultValue": "webapp",
+        "description": "webapp opens a dedicated player window; browser opens a tab in the default browser."
+      },
+      {
+        "key": "showFilter",
+        "type": "boolean",
+        "label": "Show the filter box",
+        "defaultValue": true
+      }
+    ]
+  }
+}
