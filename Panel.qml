@@ -134,7 +134,14 @@ Panel {
   onDetailChannelChanged: {
     listingRaw = ""
     listingCursor = 0
-    if (detailChannel !== "") listingProc.running = true
+    if (detailChannel === "") return
+    // Set the command here rather than binding it: a binding is re-evaluated
+    // when the property change is notified, and this handler is notified too.
+    // Whichever ran first, the helper was asked for the *previous* channel —
+    // an empty one on the first open, which it refuses, which read as "this
+    // channel has no listing" and fell back to the row already on screen.
+    listingProc.command = [pluginDir + "bin/abematv-listing", detailChannel]
+    listingProc.running = true
   }
   onCursorChanged: gridBody.revealCursor()
   onOpenedChanged: {
@@ -203,7 +210,6 @@ Panel {
   // fetched until a channel is actually opened.
   Process {
     id: listingProc
-    command: [root.pluginDir + "bin/abematv-listing", root.detailChannel]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
