@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""tools/test-listing — the parts of the listing helper that face the network.
+
+Everything here is about not trusting a reply: where it may come from, how big
+it is allowed to be, and what a file in the cache is allowed to be.
+"""
+import gzip
+import importlib.machinery
+import importlib.util
+import io
+import os
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+spec = importlib.util.spec_from_loader(
+    "abematv_listing",
+    importlib.machinery.SourceFileLoader("abematv_listing",
+                                         os.path.join(HERE, "..", "bin", "abematv-listing")))
+listing = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(listing)
+
+
+def refuses(call, *args):
+    try:
+        call(*args)
+    except (ValueError, OSError):
+        return True
+    return False
+
+
+# Only ABEMA, only over TLS. A token rides on one of these requests.
+assert listing.check_url("https://api.abema.io/v1/users")
+assert refuses(listing.check_url, "http://api.abema.io/v1/users"), "plain HTTP"
+assert refuses(listing.check_url, "https://api.abema.io.evil.test/v1/users"), "a lookalike host"
+assert refuses(listing.check_url, "https://evil.test/v1/users"), "another host entirely"
+
+# A redirect would carry the bearer token to whoever answered, so there is no
+# following it: urllib raises rather than reissuing the request.
+assert listing.NoRedirect().redirect_request(None, None, 302, "", {}, "https://evil.test") is None
+
+# A body is unpacked only as far as the ceiling, so a small gzip that opens
+# into gigabytes stops instead of filling memory.
+assert listing.unpack(b"plain", None) == b"plain"
+assert listing.unpack(gzip.compress(b"hello"), "gzip") == b"hello"
+bomb = gzip.compress(b"\0" * (listing.MAX_BODY + 1))
+assert len(bomb) < 100_000, "the point of a bomb is that it is small"
+assert refuses(listing.unpack, bomb, "gzip"), "a gzip bomb"
+
+# The cache holds a token: a symlink dropped in its place is not followed, and
+# an oversized file is ignored rather than parsed.
+with tempfile.TemporaryDirectory() as room:
+    listing.CACHE = room
+    listing.store("token.json", {"token": "secret"})
+    assert listing.cached("token.json", 3600) == {"token": "secret"}
+    assert listing.cached("token.json", 0) is None, "past its time to live"
+    assert oct(os.stat(os.path.join(room, "token.json")).st_mode)[-3:] == "600"
+
+    elsewhere = os.path.join(room, "elsewhere")
+    open(elsewhere, "w").close()
+
+    os.remove(os.path.join(room, "token.json"))
+    os.symlink(elsewhere, os.path.join(room, "token.json"))
+    assert listing.cached("token.json", 3600) is None, "a symlink is not a cache file"
+
+    os.symlink(elsewhere, os.path.join(room, "hijacked.json.part"))
+    assert refuses(listing.store, "hijacked.json", {"token": "secret"}), "written through a symlink"
+    assert os.path.getsize(elsewhere) == 0, "the token never reached the far end"
+
+    os.remove(os.path.join(room, "token.json"))
+    with open(os.path.join(room, "token.json"), "wb") as handle:
+        handle.write(b"[" + b"0," * (listing.MAX_BODY // 2))
+    assert listing.cached("token.json", 3600) is None, "an oversized cache file"
+
+print("test-listing: ok")

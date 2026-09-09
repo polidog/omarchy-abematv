@@ -103,6 +103,7 @@ widget writes nothing but its own cache under `~/.cache/omarchy-abematv`.
 
 ```bash
 tools/test-model               # the data helpers, without a shell
+tools/test-listing             # the listing helper's host, size and cache limits
 tools/install-local            # sync into ~/.config/omarchy/plugins
 tools/install-local --restart  # QML edits need the shell restarted to take
 ```

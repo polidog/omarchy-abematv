@@ -158,9 +158,14 @@ Panel {
     onTriggered: root.refresh()
   }
 
+  // Both fetches are capped where the bytes are produced rather than where they
+  // are collected: curl is told the only scheme it may speak, how much of an
+  // answer is still an answer, and — by never being handed -L — that a redirect
+  // off ABEMA is not somewhere to follow.
   Process {
     id: channelsProc
-    command: ["curl", "-fsS", "--max-time", "10", Model.CHANNELS_URL]
+    command: ["curl", "-fsS", "--proto", "=https", "--max-filesize", "8000000",
+      "--max-time", "10", Model.CHANNELS_URL]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -174,7 +179,8 @@ Panel {
 
   Process {
     id: slotsProc
-    command: ["curl", "-fsS", "--max-time", "10", Model.SLOTS_URL]
+    command: ["curl", "-fsS", "--proto", "=https", "--max-filesize", "8000000",
+      "--max-time", "10", Model.SLOTS_URL]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {

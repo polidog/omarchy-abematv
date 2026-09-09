@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.polidog.abematv",
   "name": "ABEMA",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "author": "polidog",
   "license": "MIT",
   "description": "What every ABEMA channel is airing right now, in one panel. Open a channel for its own listing, or click a programme to watch it.",

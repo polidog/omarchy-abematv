@@ -15,12 +15,14 @@ import base64
 import gzip
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -36,6 +38,15 @@ ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # an hour at most. The token outlives that by a long way; a day is polite.
 DATASET_TTL = 3600
 TOKEN_TTL = 86400
+# Nothing about a reply from the network is trusted for its size: the timetable
+# is ~1MB gzipped and ~5MB open, so anything past these is not a timetable, and
+# a body that unpacks forever stops at the second one rather than in swap.
+MAX_COMPRESSED = 8 << 20
+MAX_BODY = 32 << 20
+# Both endpoints live here, over TLS, and a token-bearing request is never
+# handed anywhere else — see NoRedirect below.
+HOSTS = frozenset(["api.abema.io"])
+
 # About a day for a busy channel — enough to answer "what's on this evening"
 # without handing the panel a list nobody scrolls to the end of.
 LIMIT = 24
@@ -73,6 +84,40 @@ def application_key_secret(device_id):
     return b64(state["tmp"]).decode()
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects outright.
+
+    urllib carries the original headers onto the new request, so a 302 would
+    hand the bearer token to whatever host answered — the one thing here worth
+    stealing. There is nothing to follow: both URLs are constants.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirect)
+
+
+def check_url(url):
+    """Only ever TLS, only ever ABEMA."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" or parts.hostname not in HOSTS:
+        raise ValueError("refusing %s" % url)
+    return url
+
+
+def unpack(body, encoding):
+    """Undo Content-Encoding without trusting what it unpacks to."""
+    if encoding != "gzip":
+        return body
+    # Read one byte past the ceiling: if it arrives, the body is over it.
+    opened = gzip.GzipFile(fileobj=io.BytesIO(body)).read(MAX_BODY + 1)
+    if len(opened) > MAX_BODY:
+        raise ValueError("the body unpacks to more than %d bytes" % MAX_BODY)
+    return opened
+
+
 def fetch(url, headers=None, payload=None):
     # ABEMA answers 406 to a request that will not take gzip, so ask for it and
     # unwrap it here rather than wondering why the timetable is "unacceptable".
@@ -82,23 +127,35 @@ def fetch(url, headers=None, payload=None):
     if payload is not None:
         data = json.dumps(payload).encode()
         head["Content-Type"] = "application/json"
-    with urllib.request.urlopen(
-            urllib.request.Request(url, data=data, headers=head), timeout=30) as answer:
-        body = answer.read()
-        if answer.headers.get("Content-Encoding") == "gzip":
-            body = gzip.decompress(body)
+    with OPENER.open(urllib.request.Request(check_url(url), data=data, headers=head),
+                     timeout=30) as answer:
+        body = answer.read(MAX_COMPRESSED + 1)
+        if len(body) > MAX_COMPRESSED:
+            raise ValueError("the reply is longer than %d bytes" % MAX_COMPRESSED)
+        body = unpack(body, answer.headers.get("Content-Encoding"))
     return json.loads(body)
+
+
+# The cache holds a bearer token, so every open of it refuses a symlink: a file
+# planted in its place must not become a path to somewhere else's secrets, and
+# must not read back as something the rest of this script trusts.
+def _open(path, flags, mode=0o600):
+    return os.fdopen(os.open(path, flags | os.O_NOFOLLOW, mode),
+                     "wb" if flags & os.O_WRONLY else "rb")
 
 
 def cached(name, ttl):
     path = os.path.join(CACHE, name)
     try:
-        if time.time() - os.path.getmtime(path) < ttl:
-            with open(path, "rb") as handle:
-                return json.load(handle)
+        if time.time() - os.path.getmtime(path) >= ttl:
+            return None
+        with _open(path, os.O_RDONLY) as handle:
+            held = handle.read(MAX_BODY + 1)
+        if len(held) > MAX_BODY:
+            return None
+        return json.loads(held)
     except (OSError, ValueError):
-        pass
-    return None
+        return None
 
 
 def store(name, value):
@@ -106,8 +163,8 @@ def store(name, value):
     path = os.path.join(CACHE, name)
     # A half-written cache file would be read back as a broken timetable, so
     # write beside it and rename over the top.
-    with open(path + ".part", "w") as handle:
-        json.dump(value, handle)
+    with _open(path + ".part", os.O_WRONLY | os.O_CREAT | os.O_TRUNC) as handle:
+        handle.write(json.dumps(value).encode())
     os.replace(path + ".part", path)
 
 

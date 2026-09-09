@@ -97,6 +97,7 @@ ABEMA / サイバーエージェントとは関係ありません。
 
 ```bash
 tools/test-model               # シェルなしでデータ処理だけをテスト
+tools/test-listing             # 番組表ヘルパーの接続先・サイズ・キャッシュの制限
 tools/install-local            # ~/.config/omarchy/plugins へ同期
 tools/install-local --restart  # QML を変えたときはシェル再起動が要る
 ```
