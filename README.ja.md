@@ -24,15 +24,27 @@
 ## インストール
 
 ```bash
+omarchy plugin add https://github.com/polidog/omarchy-plugin-abematv.git --enable
+```
+
+`--enable` を付けるとバーに追加して置き場所（左/中央/右）を聞かれます。あとから
+入れ替えるなら次のとおり。
+
+```bash
+omarchy plugin update io.github.polidog.abematv   # 更新
+omarchy plugin remove io.github.polidog.abematv   # 削除
+omarchy bar move io.github.polidog.abematv --section right
+```
+
+プラグインは `omarchy-shell` の中で素のまま動くので、入れる前にコードを読んでく
+ださい。QML 1 枚・JS 1 枚・シェルスクリプト 2 本だけです。
+
+### 手元で触る場合
+
+```bash
 git clone https://github.com/polidog/omarchy-plugin-abematv
 cd omarchy-plugin-abematv
 tools/install-local
-```
-
-そのあと Omarchy の設定パネルからバーに追加するか、次を実行します。
-
-```bash
-omarchy bar put io.github.polidog.abematv --section right
 ```
 
 ## 設定
