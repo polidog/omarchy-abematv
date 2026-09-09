@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.polidog.abematv",
   "name": "ABEMA",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "polidog",
   "license": "MIT",
-  "description": "What every ABEMA channel is airing right now, in one panel. Click a channel for its programme, then watch it.",
+  "description": "What every ABEMA channel is airing right now, in one panel. Open a channel for its own listing, or click a programme to watch it.",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "ABEMA",
-    "description": "Live ABEMA schedule; click a channel for what it is airing, then Enter to watch.",
+    "description": "Live ABEMA schedule; click a programme to watch it, or a channel for its listing.",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "right",

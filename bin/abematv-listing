@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""abematv-listing — one ABEMA channel's schedule, as a broadcast/slots document.
+
+The token-free endpoints the panel polls only know what is on air right now,
+so a channel's own listing has to come from `/v1/timetable/dataSet`, which
+wants the bearer token ABEMA's clients mint for themselves on first run: a
+device UUID and an HMAC chain over a key baked into the app. This mints that
+same anonymous token — no account, no login — caches it next to the timetable,
+and prints the slots for one channel in the shape `/v1/broadcast/slots` uses,
+so the panel's model reads it without learning a second format.
+
+Usage: abematv-listing <channel-id>
+"""
+import base64
+import gzip
+import hashlib
+import hmac
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+# From ABEMA's own client. It is only ever used to mint an anonymous device
+# token; nothing here touches playback or DRM.
+SECRET = (b'v+Gjs=25Aw5erR!J8ZuvRrCx*rGswhB&qdHd_SYerEWdU&a?3DzN9BRbp5KwY4hEmcj5'
+          b'#fykMjJ=AuWz5GSMY-d@H7DMEh3M@9n2G552Us$$k9cD=3TxwWe86!x#Zyhe')
+USERS_URL = "https://api.abema.io/v1/users"
+DATASET_URL = "https://api.abema.io/v1/timetable/dataSet?debug=false"
+ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+# The timetable is ~1MB gzipped and covers a fortnight, so it is fetched once
+# an hour at most. The token outlives that by a long way; a day is polite.
+DATASET_TTL = 3600
+TOKEN_TTL = 86400
+# About a day for a busy channel — enough to answer "what's on this evening"
+# without handing the panel a list nobody scrolls to the end of.
+LIMIT = 24
+# Only the fields Model.js reads. The timetable carries no credit block, so
+# there is no cast line to pass on.
+FIELDS = ("id", "channelId", "title", "highlight", "detailHighlight", "content",
+          "startAt", "endAt")
+
+CACHE = os.path.join(
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+    "omarchy-abematv")
+
+
+def application_key_secret(device_id):
+    """ABEMA's applicationKeySecret: an HMAC chain wound by the current hour."""
+    stamp = int((time.time() // 3600 + 1) * 3600)
+    when = time.gmtime(stamp)
+    state = {"tmp": b""}
+
+    def mix(nonce):
+        state["tmp"] = hmac.new(SECRET, nonce, hashlib.sha256).digest()
+
+    def b64(value):
+        return base64.urlsafe_b64encode(value).rstrip(b"=")
+
+    mix(SECRET)
+    for _ in range(when.tm_mon):
+        mix(state["tmp"])
+    mix(b64(state["tmp"]) + device_id.encode())
+    for _ in range(when.tm_mday % 5):
+        mix(state["tmp"])
+    mix(b64(state["tmp"]) + str(stamp).encode())
+    for _ in range(when.tm_hour % 5):
+        mix(state["tmp"])
+    return b64(state["tmp"]).decode()
+
+
+def fetch(url, headers=None, payload=None):
+    # ABEMA answers 406 to a request that will not take gzip, so ask for it and
+    # unwrap it here rather than wondering why the timetable is "unacceptable".
+    head = {"Accept-Encoding": "gzip", "Accept": "application/json"}
+    head.update(headers or {})
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode()
+        head["Content-Type"] = "application/json"
+    with urllib.request.urlopen(
+            urllib.request.Request(url, data=data, headers=head), timeout=30) as answer:
+        body = answer.read()
+        if answer.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+    return json.loads(body)
+
+
+def cached(name, ttl):
+    path = os.path.join(CACHE, name)
+    try:
+        if time.time() - os.path.getmtime(path) < ttl:
+            with open(path, "rb") as handle:
+                return json.load(handle)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def store(name, value):
+    os.makedirs(CACHE, mode=0o700, exist_ok=True)
+    path = os.path.join(CACHE, name)
+    # A half-written cache file would be read back as a broken timetable, so
+    # write beside it and rename over the top.
+    with open(path + ".part", "w") as handle:
+        json.dump(value, handle)
+    os.replace(path + ".part", path)
+
+
+def token(fresh=False):
+    if not fresh:
+        held = cached("token.json", TOKEN_TTL)
+        if held and held.get("token"):
+            return held["token"]
+    device_id = str(uuid.uuid4())
+    minted = fetch(USERS_URL, payload={
+        "deviceId": device_id,
+        "applicationKeySecret": application_key_secret(device_id),
+    })["token"]
+    store("token.json", {"token": minted, "deviceId": device_id})
+    return minted
+
+
+def timetable():
+    held = cached("dataset.json", DATASET_TTL)
+    if held:
+        return held
+    try:
+        fresh = fetch(DATASET_URL, {"Authorization": "bearer " + token()})
+    except urllib.error.HTTPError as problem:
+        if problem.code not in (401, 403):
+            raise
+        # The cached token expired or was refused; one retry with a new one.
+        fresh = fetch(DATASET_URL, {"Authorization": "bearer " + token(fresh=True)})
+    store("dataset.json", fresh)
+    return fresh
+
+
+def main(argv):
+    if len(argv) != 2 or not ID.match(argv[1]):
+        print("usage: abematv-listing <channel-id>", file=sys.stderr)
+        return 2
+    channel_id = argv[1]
+
+    now = time.time()
+    slots = [slot for slot in timetable().get("slots", [])
+             if isinstance(slot, dict)
+             and slot.get("channelId") == channel_id
+             and slot.get("endAt", 0) > now]
+    slots.sort(key=lambda slot: slot.get("startAt", 0))
+    json.dump({"slots": [{key: slot[key] for key in FIELDS if key in slot}
+                         for slot in slots[:LIMIT]]}, sys.stdout, ensure_ascii=False)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except Exception as problem:  # a dead network is not a stack trace
+        print("abematv-listing: %s" % problem, file=sys.stderr)
+        sys.exit(1)

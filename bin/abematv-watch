@@ -7,9 +7,11 @@
 # anyway, and the new window lands in the same place under the same rules.
 set -euo pipefail
 
+# A live channel, or the page for one programme that has not started yet.
 url="${1:-}"
 case "$url" in
   https://abema.tv/now-on-air/*) ;;
+  https://abema.tv/channels/*/slots/*) ;;
   *) echo "abematv-watch: refusing '$url'" >&2; exit 1 ;;
 esac
 

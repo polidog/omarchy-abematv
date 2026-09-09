@@ -26,6 +26,10 @@ Panel {
   // otherwise. Held as an id rather than as the row, so the detail view keeps
   // ticking along with everything else.
   property string detailChannel: ""
+  // The channel view walks its own rows, so it keeps its own cursor: the
+  // schedule's indexes count channels, and these count programmes.
+  property int listingCursor: 0
+  property string listingRaw: ""
   // Drives the "12m left" labels and the progress bars. Stepped by the same
   // timer that refetches, so the two never disagree by more than a tick.
   property int nowSeconds: Math.floor(Date.now() / 1000)
@@ -40,14 +44,29 @@ Panel {
   readonly property var grid: Model.buildGrid(channelsRaw, slotsRaw, filter, nowSeconds)
   // Same rows either way; only the order the cursor walks them in differs.
   readonly property var items: layout === "grid" ? grid.columns : view.rows
-  // ABEMA's token-free endpoints only know what is on air right now, so a
-  // channel's "listing" is the one slot it is airing — the detail view is
-  // where the rest of that slot (synopsis, cast) finally fits.
-  readonly property var detailRow: {
+  // What the schedule already knows about the channel a head was tapped on:
+  // the slot it is airing, and no more — the polled endpoints have no "later".
+  readonly property var airingRows: {
+    var found = []
     for (var i = 0; i < items.length; i++) {
-      if (items[i].channelId === detailChannel) return items[i]
+      if (items[i].channelId === detailChannel) found.push(items[i])
     }
-    return null
+    return found
+  }
+  // The channel's real listing, once the helper has fetched it. Reuses the
+  // listing layout's own builder: the helper answers in the shape the polled
+  // endpoint uses, so there is one row format in this panel, not two.
+  readonly property var listingRows: listingRaw === ""
+    ? [] : Model.buildView(channelsRaw, listingRaw, "", nowSeconds).rows
+  // The listing where it arrived, what is on now until it does. A channel is
+  // open whenever either has a row, so the view never blinks out mid-fetch.
+  readonly property var channelRows: listingRows.length > 0 ? listingRows : airingRows
+  // The programme the cursor is on. Everything that dereferences a row tests
+  // this one property rather than a second, separately-updated flag: two
+  // bindings can disagree for a frame, and the delegate would read past it.
+  readonly property var detailRow: {
+    if (detailChannel === "" || channelRows.length === 0) return null
+    return channelRows[Math.max(0, Math.min(channelRows.length - 1, listingCursor))]
   }
   readonly property bool showingDetail: detailRow !== null
   readonly property bool loading: channelsProc.running || slotsProc.running
@@ -64,12 +83,17 @@ Panel {
   }
 
   function moveCursor(delta) {
+    // Inside a channel the cursor walks that channel's programmes; outside it
+    // walks the schedule.
+    if (detailChannel !== "") {
+      if (channelRows.length === 0) return
+      cursorActive = true
+      listingCursor = Math.max(0, Math.min(channelRows.length - 1, listingCursor + delta))
+      return
+    }
     if (items.length === 0) return
     cursorActive = true
     cursor = Math.max(0, Math.min(items.length - 1, cursor + delta))
-    // In the detail view the cursor *is* the channel on screen, so walking it
-    // walks channels instead of scrolling a list that is not there.
-    if (detailChannel !== "") detailChannel = items[cursor].channelId
   }
 
   // A click on a channel opens what it is airing rather than the player; the
@@ -78,15 +102,16 @@ Panel {
     if (!row || !Model.isChannelId(row.channelId)) return
     cursor = row.flatIndex
     cursorActive = true
+    listingCursor = 0
     detailChannel = row.channelId
   }
 
-  // The row carries a URL that Model built from a validated channel id; check
-  // the shape again on the way out, so the only thing that can ever reach a
-  // command line is an ABEMA channel page.
+  // The row carries a URL that Model built from validated ids; check the shape
+  // again on the way out, so the only thing that can ever reach a command line
+  // is an ABEMA channel or programme page.
   function watch(row) {
-    if (!row || !Model.isChannelId(row.channelId)) return
-    var url = Model.watchUrl(row.channelId)
+    if (!row) return
+    var url = Model.rowUrl(row, nowSeconds)
     if (url === "") return
 
     close()
@@ -98,7 +123,7 @@ Panel {
   }
 
   function activateCursor() {
-    if (showingDetail) { watch(detailRow); return }
+    if (detailChannel !== "") { watch(detailRow); return }
     if (cursor >= 0 && cursor < items.length) openDetail(items[cursor])
   }
 
@@ -106,12 +131,18 @@ Panel {
   implicitHeight: button.implicitHeight
 
   onFilterChanged: { cursor = 0; detailChannel = "" }
+  onDetailChannelChanged: {
+    listingRaw = ""
+    listingCursor = 0
+    if (detailChannel !== "") listingProc.running = true
+  }
   onCursorChanged: gridBody.revealCursor()
   onOpenedChanged: {
     if (opened) {
       cursor = 0
       cursorActive = false
       detailChannel = ""
+      listingRaw = ""
       filterField.text = ""
       refresh()
     }
@@ -156,6 +187,23 @@ Panel {
         }
         root.fetchError = ""
         root.slotsRaw = raw
+      }
+    }
+  }
+
+  // The channel's own listing. ABEMA gates the full timetable behind the token
+  // its clients mint for themselves, so this one goes through a helper rather
+  // than a bare curl; it answers in the polled endpoint's shape. Nothing is
+  // fetched until a channel is actually opened.
+  Process {
+    id: listingProc
+    command: [root.pluginDir + "bin/abematv-listing", root.detailChannel]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var raw = String(text || "").trim()
+        // No listing is not an error: the panel falls back to what is on air.
+        if (raw !== "" && root.detailChannel !== "") root.listingRaw = raw
       }
     }
   }
@@ -250,7 +298,7 @@ Panel {
           PanelHero {
             width: parent.width
             title: "ABEMA"
-            meta: root.showingDetail ? root.detailRow.channelName
+            meta: root.detailRow ? root.detailRow.channelName
               : root.loading && root.view.total === 0 ? "Loading…" : Model.summary(root.view)
             foreground: root.bar.foreground
             fontFamily: root.bar.fontFamily
@@ -725,15 +773,16 @@ Panel {
             }
           }
 
-          // What a click on a channel opens: the slot it is airing, with the
-          // synopsis and cast the schedule views have no room for. A one-row
-          // Repeater rather than a visibility flag, so nothing in here has to
-          // guard against there being no channel selected.
+          // What the channel head opens: the channel, and every slot ABEMA
+          // says it is airing. Tapping a programme hands the channel to the
+          // player, so this list is the last stop rather than a card on the
+          // way to one. A one-row Repeater for the header rather than a
+          // visibility flag, so nothing in here guards against no channel.
           Repeater {
-            model: root.showingDetail ? [root.detailRow] : []
+            model: root.detailRow ? [root.detailRow] : []
 
             delegate: Column {
-              id: detailBody
+              id: channelBody
               required property var modelData
               width: panelColumn.width
               spacing: Style.space(8)
@@ -757,20 +806,20 @@ Panel {
                   height: Style.space(16)
 
                   Image {
-                    id: detailLogo
+                    id: channelHeadLogo
                     anchors.fill: parent
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
-                    source: detailBody.modelData.logoUrl
+                    source: channelBody.modelData.logoUrl
                     sourceSize.height: Math.round(height * Screen.devicePixelRatio)
                     visible: false
                     layer.enabled: true
                   }
 
                   MultiEffect {
-                    anchors.fill: detailLogo
-                    source: detailLogo
-                    visible: detailLogo.status === Image.Ready
+                    anchors.fill: channelHeadLogo
+                    source: channelHeadLogo
+                    visible: channelHeadLogo.status === Image.Ready
                     colorization: 1.0
                     colorizationColor: Color.accent
                   }
@@ -781,120 +830,128 @@ Panel {
                   width: Math.max(0, parent.width - Style.space(96))
                   textFormat: Text.PlainText
                   elide: Text.ElideRight
-                  text: detailBody.modelData.channelName
-                  color: Qt.darker(root.bar.foreground, 1.35)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-
-              Text {
-                width: parent.width
-                textFormat: Text.PlainText
-                wrapMode: Text.WordWrap
-                text: detailBody.modelData.title
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.title
-              }
-
-              Item {
-                width: parent.width
-                implicitHeight: detailClock.implicitHeight
-
-                Text {
-                  id: detailClock
-                  anchors.left: parent.left
-                  textFormat: Text.PlainText
-                  text: detailBody.modelData.startLabel + " " + detailBody.modelData.endLabel
-                    + (detailBody.modelData.dayNote === "" ? "" : "  " + detailBody.modelData.dayNote)
-                  color: Color.accent
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                Text {
-                  anchors.right: parent.right
-                  anchors.verticalCenter: detailClock.verticalCenter
-                  textFormat: Text.PlainText
-                  text: detailBody.modelData.remainLabel
-                  color: Qt.darker(root.bar.foreground, 1.6)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-
-              Rectangle {
-                width: parent.width
-                height: Style.space(2)
-                radius: height / 2
-                color: Qt.darker(root.bar.foreground, 2.4)
-
-                Rectangle {
-                  width: parent.width * detailBody.modelData.progress
-                  height: parent.height
-                  radius: parent.radius
-                  color: Color.accent
-                }
-              }
-
-              Text {
-                visible: text !== ""
-                width: parent.width
-                textFormat: Text.PlainText
-                wrapMode: Text.WordWrap
-                text: detailBody.modelData.detail
-                color: Qt.darker(root.bar.foreground, 1.3)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.body
-              }
-
-              Text {
-                visible: text !== ""
-                width: parent.width
-                textFormat: Text.PlainText
-                wrapMode: Text.WordWrap
-                text: detailBody.modelData.content
-                color: Qt.darker(root.bar.foreground, 1.5)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
-                visible: text !== ""
-                width: parent.width
-                textFormat: Text.PlainText
-                wrapMode: Text.WordWrap
-                text: detailBody.modelData.casts
-                color: Qt.darker(root.bar.foreground, 1.8)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              CursorSurface {
-                width: parent.width
-                implicitHeight: watchLabel.implicitHeight + Style.spacing.lg
-                hasCursor: root.cursorActive
-                bordered: true
-                foreground: root.bar.foreground
-                fill: Style.hoverFillFor(root.bar.foreground, Color.accent)
-
-                Text {
-                  id: watchLabel
-                  anchors.centerIn: parent
-                  textFormat: Text.PlainText
-                  text: Model.ICONS.play + "  Watch this channel"
+                  text: channelBody.modelData.channelName
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.body
+                  font.pixelSize: Style.font.title
                 }
+              }
 
-                HoverHandler {
-                  cursorShape: Qt.PointingHandCursor
-                }
+              // One row per slot: when it runs, what it is, how far in it is.
+              Repeater {
+                model: root.channelRows
 
-                TapHandler {
-                  onTapped: root.watch(detailBody.modelData)
+                delegate: CursorSurface {
+                  id: slotRow
+                  required property var modelData
+                  required property int index
+                  width: channelBody.width
+                  implicitHeight: slotBody.implicitHeight + Style.spacing.lg
+                  hasCursor: root.cursorActive && root.listingCursor === slotRow.index
+                  bordered: true
+                  foreground: root.bar.foreground
+                  fill: Style.hoverFillFor(root.bar.foreground, Color.accent)
+
+                  Column {
+                    id: slotBody
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(10)
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(10)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(4)
+
+                    Text {
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      text: slotRow.modelData.startLabel + " " + slotRow.modelData.endLabel
+                        + (slotRow.modelData.dayNote === "" ? "" : "  " + slotRow.modelData.dayNote)
+                      color: Color.accent
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Text {
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      wrapMode: Text.WordWrap
+                      elide: Text.ElideRight
+                      maximumLineCount: 2
+                      text: slotRow.modelData.title
+                      color: root.bar.foreground
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    // What ABEMA writes about the programme: the one-line
+                    // pitch, then as much of the synopsis as two lines hold.
+                    Text {
+                      visible: text !== ""
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      elide: Text.ElideRight
+                      text: slotRow.modelData.detail
+                      color: Qt.darker(root.bar.foreground, 1.5)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Text {
+                      visible: text !== ""
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      wrapMode: Text.WordWrap
+                      elide: Text.ElideRight
+                      maximumLineCount: 2
+                      text: slotRow.modelData.content
+                      color: Qt.darker(root.bar.foreground, 1.9)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Item {
+                      visible: slotRow.modelData.remainLabel !== ""
+                      width: parent.width
+                      implicitHeight: visible ? slotRemain.implicitHeight : 0
+
+                      Text {
+                        id: slotRemain
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: slotRow.modelData.remainLabel
+                        color: Qt.darker(root.bar.foreground, 1.6)
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+
+                      Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: slotRemain.left
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: Style.space(2)
+                        radius: height / 2
+                        color: Qt.darker(root.bar.foreground, 2.4)
+
+                        Rectangle {
+                          width: parent.width * slotRow.modelData.progress
+                          height: parent.height
+                          radius: parent.radius
+                          color: Color.accent
+                        }
+                      }
+                    }
+                  }
+
+                  HoverHandler {
+                    cursorShape: Qt.PointingHandCursor
+                    onHoveredChanged: if (hovered) { root.cursorActive = true; root.listingCursor = slotRow.index }
+                  }
+
+                  TapHandler {
+                    onTapped: root.watch(slotRow.modelData)
+                  }
                 }
               }
             }
@@ -909,7 +966,7 @@ Panel {
             width: parent.width
             textFormat: Text.PlainText
             text: root.showingDetail
-              ? "Enter watch · Esc back · " + (root.layout === "grid" ? "h/l" : "j/k") + " channel"
+              ? "Enter watch · Esc back · " + (root.layout === "grid" ? "h/l" : "j/k") + " programme"
               : (root.layout === "grid" ? "h/l move" : "j/k move")
                 + " · Enter open · / filter · r refresh"
             color: Qt.darker(root.bar.foreground, 1.6)

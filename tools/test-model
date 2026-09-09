@@ -9,7 +9,7 @@ const assert = require("assert")
 const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
   .replace(/^\s*\.pragma\s+library\s*/, "")
 const M = {}
-new Function("exports", source + "\nObject.assign(exports, { buildView, buildGrid, gridWindow, summary, isChannelId, watchUrl, logoUrl, dayNote, clock, formatRemaining, progressOf, castLine })")(M)
+new Function("exports", source + "\nObject.assign(exports, { buildView, buildGrid, gridWindow, summary, isChannelId, watchUrl, logoUrl, dayNote, clock, formatRemaining, progressOf, slotUrl, rowUrl })")(M)
 
 const NOW = 1700000000
 const channels = JSON.stringify({ channels: [
@@ -78,6 +78,30 @@ assert.strictEqual(M.formatRemaining(NOW + 720, NOW), "12m left")
 assert.strictEqual(M.formatRemaining(NOW - 5, NOW), "ending")
 assert.strictEqual(M.formatRemaining(NOW + 5400, NOW), "1h 30m left")
 
+// A programme on air now opens the live channel; a later one opens its own
+// page, because there is no stream to join yet.
+assert.strictEqual(M.slotUrl("abema-news", "AaogFhsJ4voNLX"),
+  "https://abema.tv/channels/abema-news/slots/AaogFhsJ4voNLX")
+assert.strictEqual(M.slotUrl("abema-news", "../x"), "")
+const airing = { channelId: "abema-news", slotId: "AaogFhsJ4voNLX", startAt: NOW - 10, endAt: NOW + 10 }
+const later = { channelId: "abema-news", slotId: "AaogFhsJ4voNLX", startAt: NOW + 600, endAt: NOW + 1200 }
+assert.strictEqual(M.rowUrl(airing, NOW), "https://abema.tv/now-on-air/abema-news")
+assert.strictEqual(M.rowUrl(later, NOW), "https://abema.tv/channels/abema-news/slots/AaogFhsJ4voNLX")
+assert.strictEqual(M.rowUrl({ channelId: "abema-news", slotId: "", startAt: NOW + 600, endAt: NOW + 1200 }, NOW),
+  "https://abema.tv/now-on-air/abema-news", "no slot id, no slot page")
+assert.strictEqual(M.rowUrl(null, NOW), "")
+
+// A channel's own listing runs into tomorrow, so the day note points both ways
+// and a programme that has not started counts down to nothing.
+assert.strictEqual(M.dayNote(NOW + DAY, NOW), "+1d")
+const ahead = M.buildView(channels, JSON.stringify({ slots: [
+  { channelId: "abema-news", id: "AaogFhsJ4voNLX", title: "Tonight", startAt: NOW + 3600, endAt: NOW + 7200 }
+]}), "", NOW).rows[0]
+assert.strictEqual(ahead.remainLabel, "", "nothing is left of a programme that has not started")
+assert.strictEqual(ahead.progress, 0)
+assert.strictEqual(ahead.url, "https://abema.tv/channels/abema-news/slots/AaogFhsJ4voNLX")
+assert.strictEqual(view.rows[0].slotId, "", "a slot without an id still yields a string")
+
 // Filtering matches channel names and programme titles alike.
 assert.strictEqual(M.buildView(channels, slots, "ニュース", NOW).matched, 1)
 assert.strictEqual(M.buildView(channels, slots, "ABEMA", NOW).matched, 2)
@@ -86,21 +110,16 @@ assert.strictEqual(M.buildView(channels, slots, "zzz", NOW).total, 3, "a filter 
 assert.strictEqual(M.buildView(channels, slots, "zzz", NOW).groups.length, 0, "no rows, no headings")
 assert.strictEqual(M.buildView(channels, slots, "\u30cb\u30e5\u30fc\u30b9", NOW).groups.length, 1)
 
-// The detail view reads three more fields off the slot; they are clamped like
-// every other string, and a slot without them still yields strings.
+// The channel listing reads two more fields off the slot; they are clamped
+// like every other string, and a slot without them still yields strings.
 const detailed = JSON.stringify({ slots: [{
   channelId: "abema-news", title: "Long one", startAt: NOW, endAt: NOW + 60,
   detailHighlight: "\u898b\u3069\u3053\u308d", content: "a\nb",
-  credit: { casts: ["A", "B"], crews: ["C"] }
 }]})
 const withDetail = M.buildView(channels, detailed, "", NOW).rows[0]
 assert.strictEqual(withDetail.detail, "\u898b\u3069\u3053\u308d")
 assert.strictEqual(withDetail.content, "a b", "a newline would fold the detail view's layout")
-assert.strictEqual(withDetail.casts, "A / B", "crews are left out; only the cast line fits")
 assert.strictEqual(view.rows[0].detail, "")
-assert.strictEqual(view.rows[0].casts, "", "no credit block, no cast line")
-assert.strictEqual(M.castLine({ casts: "not an array" }), "")
-assert.strictEqual(M.castLine(null), "")
 assert.ok(M.buildView(channels, JSON.stringify({ slots: [{
   channelId: "abema-news", title: "x", startAt: NOW, endAt: NOW + 60,
   content: "\u3042".repeat(900)

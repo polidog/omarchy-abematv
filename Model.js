@@ -40,14 +40,34 @@ function clampText(value, limit) {
   return text.length > max ? text.substring(0, max) + "…" : text
 }
 
-// A channel id lands in a URL and on a command line, so it never leaves this
-// file unless it looks like one.
-function isChannelId(value) {
+// A channel or slot id lands in a URL and on a command line, so it never
+// leaves this file unless it looks like one.
+function isId(value) {
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(String(value === undefined || value === null ? "" : value))
+}
+
+function isChannelId(value) {
+  return isId(value)
 }
 
 function watchUrl(channelId) {
   return isChannelId(channelId) ? "https://abema.tv/now-on-air/" + channelId : ""
+}
+
+// ABEMA's page for one programme: where a slot that has not started yet lives.
+function slotUrl(channelId, slotId) {
+  return isId(channelId) && isId(slotId)
+    ? "https://abema.tv/channels/" + channelId + "/slots/" + slotId
+    : ""
+}
+
+// Where activating a row goes. A programme on air now is the live channel;
+// anything later has no stream yet, so it opens its own page instead.
+function rowUrl(row, now) {
+  if (!row) return ""
+  var airing = Number(row.startAt) <= now && now < Number(row.endAt)
+  var slot = slotUrl(row.channelId, row.slotId)
+  return airing || slot === "" ? watchUrl(row.channelId) : slot
 }
 
 // White transparent PNGs, which the panel recolors to the bar foreground.
@@ -56,13 +76,6 @@ function logoUrl(channelId) {
   return isChannelId(channelId)
     ? IMAGE_HOST + "/channels/" + channelId + "/logo.png?height=48&quality=75&width=144&version=1"
     : ""
-}
-
-// The detail view names who is in it. ABEMA lists casts and crews separately;
-// only the cast line is short enough to belong in a bar panel.
-function castLine(credit) {
-  var casts = credit && credit.casts instanceof Array ? credit.casts : []
-  return clampText(casts.join(" / "), 200)
 }
 
 function parse(raw) {
@@ -96,7 +109,10 @@ function dayNote(startAtSeconds, now) {
   var startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()
   var todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
   var days = Math.round((todayDay - startDay) / 86400000)
-  return days <= 0 ? "" : days === 1 ? "-1d" : "-" + days + "d"
+  if (days === 0) return ""
+  // A channel's own listing runs into tomorrow, so the note points both ways:
+  // without it a 09:00 heading under an 23:40 one reads as the same morning.
+  return (days > 0 ? "-" : "+") + Math.abs(days) + "d"
 }
 
 function progressOf(startAt, endAt, now) {
@@ -148,27 +164,29 @@ function collectRows(channelsRaw, slotsRaw, filter, now) {
     var slot = airing[j]
     if (!slot || !isChannelId(slot.channelId)) continue
 
-    rows.push({
+    var row = {
       channelId: String(slot.channelId),
+      slotId: isId(slot.id) ? String(slot.id) : "",
       channelName: names[slot.channelId] || String(slot.channelId),
       logoUrl: logoUrl(slot.channelId),
       title: clampText(slot.title) || "(no title)",
       highlight: clampText(slot.highlight, 80),
-      // Only the detail view prints these three; they are the rest of what a
-      // slot carries about the programme.
+      // The channel's own listing prints these two under the title; they are
+      // the rest of what a slot says about the programme.
       detail: clampText(slot.detailHighlight, 200),
       content: clampText(slot.content, 600),
-      casts: castLine(slot.credit),
-      url: watchUrl(slot.channelId),
       startAt: Number(slot.startAt) || 0,
       endAt: Number(slot.endAt) || 0,
       startLabel: clock(slot.startAt),
       dayNote: dayNote(slot.startAt, now),
       endLabel: clock(slot.endAt) === "" ? "" : "~" + clock(slot.endAt),
-      remainLabel: formatRemaining(slot.endAt, now),
+      // A programme that has not started has nothing left of it to count.
+      remainLabel: now < Number(slot.startAt) ? "" : formatRemaining(slot.endAt, now),
       progress: progressOf(slot.startAt, slot.endAt, now),
       channelOrder: order.hasOwnProperty(slot.channelId) ? order[slot.channelId] : LIMITS.rows + j
-    })
+    }
+    row.url = rowUrl(row, now)
+    rows.push(row)
   }
 
   result.total = rows.length
