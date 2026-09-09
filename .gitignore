@@ -1,0 +1,7 @@
+# Qt's QML disk cache, when it is pointed at the source tree instead of ~/.cache
+*.qmlc
+*.jsc
+
+# Editor and OS cruft
+*.swp
+.DS_Store
