@@ -89,9 +89,15 @@ and `/v1/broadcast/slots`), which answer without a token. One channel's own
 listing comes from `/v1/timetable/dataSet`, which does not: `bin/abematv-listing`
 mints the anonymous device token ABEMA's own clients mint on first run — no
 account, no login, nothing to do with playback or DRM — and caches it and the
-timetable under `~/.cache/omarchy-abematv`. It needs `python3`, which Omarchy
-already has. This is an unofficial plugin and is not affiliated with ABEMA or
+timetable under `~/.cache/omarchy-abematv`. This is an unofficial plugin and is not affiliated with ABEMA or
 CyberAgent.
+
+## Dependencies
+
+All of these ship with Omarchy: `python3` (the listing helper), `curl` (the two
+polled endpoints), `jq` and `hyprctl` (finding the ABEMA window to replace), and
+`omarchy-launch-webapp` or `omarchy-launch-browser` (opening the player). The
+widget writes nothing but its own cache under `~/.cache/omarchy-abematv`.
 
 ## Development
 

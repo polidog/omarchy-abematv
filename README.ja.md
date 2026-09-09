@@ -83,9 +83,15 @@ tools/install-local
 番組表は `/v1/timetable/dataSet` から取っていて、こちらはトークンが要ります。
 `bin/abematv-listing` が ABEMA のクライアントと同じ匿名の端末トークンを作り
 （アカウントもログインも不要で、再生や DRM には一切触りません）、番組表ごと
-`~/.cache/omarchy-abematv` にキャッシュします。`python3` が要りますが Omarchy には
-最初から入っています。非公式プラグインであり、ABEMA / サイバーエージェントとは
-関係ありません。
+`~/.cache/omarchy-abematv` にキャッシュします。非公式プラグインであり、
+ABEMA / サイバーエージェントとは関係ありません。
+
+## 依存
+
+どれも Omarchy に最初から入っています。`python3`（番組表ヘルパー）、`curl`（1 分ごとに
+叩く 2 つのエンドポイント）、`jq` と `hyprctl`（置き換える ABEMA ウィンドウを探す）、
+`omarchy-launch-webapp` / `omarchy-launch-browser`（プレイヤーを開く）。書き込むのは
+`~/.cache/omarchy-abematv` の自分のキャッシュだけです。
 
 ## 開発
 
