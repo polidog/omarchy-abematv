@@ -10,10 +10,6 @@
 var CHANNELS_URL = "https://api.abema.io/v1/channels"
 var SLOTS_URL = "https://api.abema.io/v1/broadcast/slots"
 var IMAGE_HOST = "https://image.p-c2-x.abema-tv.com/image"
-// The site favicon: ABEMA's mascot and wordmark, white on transparent, which
-// is the only ABEMA brand asset that recolors cleanly for a status bar. The
-// apple-touch-icon is the same art but baked onto an opaque black square.
-var BRAND_ICON_URL = "https://abema.tv/favicon.ico?v=5"
 
 // ABEMA names its own programmes, and a title carries whatever the broadcaster
 // put in it. Everything that reaches a Text passes a limit first so one long

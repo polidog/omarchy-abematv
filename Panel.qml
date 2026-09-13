@@ -229,7 +229,7 @@ Panel {
     // if the network never answers.
     labelVisible: !root.barLogoReady
     hasVisualContent: true
-    fixedWidth: root.barLogoReady ? Style.spaceReal(24) : -1
+    fixedWidth: root.barLogoReady ? barLogo.width + Style.spaceReal(12) : -1
     active: root.opened
     useActiveColor: false
     tooltipText: "ABEMA — what's on air"
@@ -238,16 +238,18 @@ Panel {
       else root.toggle()
     }
 
-    // ABEMA ships this one white on transparent, so it recolors to the bar
-    // foreground like every other icon up there.
+    // abema.tv's wordmark, copied from the site's logo.svg with a white fill:
+    // every raster ABEMA icon is baked onto an opaque black square, and
+    // MultiEffect's colorization scales the source colour, so only a white
+    // shape on transparent recolors to the bar foreground.
     Image {
       id: barLogo
       anchors.centerIn: parent
-      height: Style.spaceReal(15)
-      width: height
+      height: Style.spaceReal(11)
+      width: height * 186 / 56
       fillMode: Image.PreserveAspectFit
       asynchronous: true
-      source: Model.BRAND_ICON_URL
+      source: Qt.resolvedUrl("abema.svg")
       sourceSize.height: Math.round(height * Screen.devicePixelRatio)
       visible: false
       layer.enabled: true
